@@ -128,6 +128,30 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
+def install_teacher_hidden_states_passthrough(model_chunk: GPTModel) -> None:
+    """Skip the vocab projection on a loaded disaggregated-OPD-teacher chunk's
+    output_layer, so forward passes return hidden states instead of logits."""
+    output_layer = getattr(model_chunk, "output_layer", None)
+    if output_layer is None:
+        return
+
+    sequence_parallel = model_chunk.config.sequence_parallel
+
+    def _passthrough(
+        input_: torch.Tensor,
+        weight: torch.Tensor | None = None,
+        runtime_gather_output: bool | None = None,
+    ) -> tuple[torch.Tensor, None]:
+        hidden_states = input_
+        if sequence_parallel:
+            hidden_states = tensor_parallel.gather_from_sequence_parallel_region(
+                hidden_states, tensor_parallel_output_grad=False
+            )
+        return hidden_states, None
+
+    output_layer.forward = _passthrough
+
+
 def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",

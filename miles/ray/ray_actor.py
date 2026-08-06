@@ -8,3 +8,6 @@ class RayActor:
 
     def get_master_addr_and_port(self):
         return self.master_addr, self.master_port
+
+    def get_free_port_on_this_node(self, start_port=20000, consecutive=1):
+        return get_free_port(start_port=start_port, consecutive=consecutive)
