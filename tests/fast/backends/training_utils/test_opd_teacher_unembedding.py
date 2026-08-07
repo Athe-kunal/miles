@@ -61,13 +61,61 @@ def test_load_teacher_output_layer_reads_only_the_two_tensors(tmp_path):
     checkpoint_dir.mkdir()
     dist_cp.save(
         {
-            "module.module.output_layer.weight": output_layer_weight,
-            "module.module.decoder.final_layernorm.weight": final_norm_weight,
-            "module.module.some_other_layer.weight": unrelated_tensor,
+            "output_layer.weight": output_layer_weight,
+            "decoder.final_layernorm.weight": final_norm_weight,
+            "some_other_layer.weight": unrelated_tensor,
         },
         storage_writer=dist_cp.FileSystemWriter(str(checkpoint_dir)),
     )
     (tmp_path / "latest_checkpointed_iteration.txt").write_text("42")
+
+    loaded_output_layer, loaded_norm = load_teacher_output_layer(
+        str(tmp_path), None, hidden_size=hidden_size, vocab_size=vocab_size, dtype=torch.float32
+    )
+
+    assert torch.equal(loaded_output_layer, output_layer_weight)
+    assert torch.equal(loaded_norm, final_norm_weight)
+
+
+def test_load_teacher_output_layer_falls_back_to_tied_embedding(tmp_path):
+    hidden_size, vocab_size = 4, 6
+    tied_embedding_weight = torch.randn(vocab_size, hidden_size)
+    final_norm_weight = torch.randn(hidden_size)
+
+    checkpoint_dir = tmp_path / "iter_0000001"
+    checkpoint_dir.mkdir()
+    dist_cp.save(
+        {
+            "embedding.word_embeddings.weight": tied_embedding_weight,
+            "decoder.final_layernorm.weight": final_norm_weight,
+        },
+        storage_writer=dist_cp.FileSystemWriter(str(checkpoint_dir)),
+    )
+    (tmp_path / "latest_checkpointed_iteration.txt").write_text("1")
+
+    loaded_output_layer, loaded_norm = load_teacher_output_layer(
+        str(tmp_path), None, hidden_size=hidden_size, vocab_size=vocab_size, dtype=torch.float32
+    )
+
+    assert torch.equal(loaded_output_layer, tied_embedding_weight)
+    assert torch.equal(loaded_norm, final_norm_weight)
+
+
+def test_load_teacher_output_layer_reads_a_release_checkpoint(tmp_path):
+    hidden_size, vocab_size = 4, 6
+    output_layer_weight = torch.randn(vocab_size, hidden_size)
+    final_norm_weight = torch.randn(hidden_size)
+
+    checkpoint_dir = tmp_path / "release"
+    checkpoint_dir.mkdir()
+    dist_cp.save(
+        {
+            "output_layer.weight": output_layer_weight,
+            "decoder.final_layernorm.weight": final_norm_weight,
+        },
+        storage_writer=dist_cp.FileSystemWriter(str(checkpoint_dir)),
+    )
+    (tmp_path / "latest_checkpointed_iteration.txt").write_text("release")
 
     loaded_output_layer, loaded_norm = load_teacher_output_layer(
         str(tmp_path), None, hidden_size=hidden_size, vocab_size=vocab_size, dtype=torch.float32
@@ -86,8 +134,8 @@ def test_load_teacher_output_layer_respects_explicit_ckpt_step(tmp_path):
     checkpoint_dir.mkdir()
     dist_cp.save(
         {
-            "module.module.output_layer.weight": output_layer_weight,
-            "module.module.decoder.final_layernorm.weight": final_norm_weight,
+            "output_layer.weight": output_layer_weight,
+            "decoder.final_layernorm.weight": final_norm_weight,
         },
         storage_writer=dist_cp.FileSystemWriter(str(checkpoint_dir)),
     )

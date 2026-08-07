@@ -14,15 +14,19 @@ import torch
 import torch.distributed.checkpoint as dist_cp
 import torch.nn.functional as F
 
-_OUTPUT_LAYER_KEY = "module.module.output_layer.weight"
-_FINAL_NORM_KEY = "module.module.decoder.final_layernorm.weight"
+_OUTPUT_LAYER_KEY = "output_layer.weight"
+_TIED_EMBEDDING_KEY = "embedding.word_embeddings.weight"
+_FINAL_NORM_KEY = "decoder.final_layernorm.weight"
 
 
 def _resolve_teacher_checkpoint_dir(checkpoint_root: str, ckpt_step: int | None) -> Path:
     root = Path(checkpoint_root)
-    if ckpt_step is None:
-        ckpt_step = int((root / "latest_checkpointed_iteration.txt").read_text().strip())
-    return root / f"iter_{ckpt_step:07d}"
+    if ckpt_step is not None:
+        return root / f"iter_{ckpt_step:07d}"
+    tracker = (root / "latest_checkpointed_iteration.txt").read_text().strip()
+    if tracker == "release":
+        return root / "release"
+    return root / f"iter_{int(tracker):07d}"
 
 
 def load_teacher_output_layer(
@@ -33,15 +37,24 @@ def load_teacher_output_layer(
     vocab_size: int,
     dtype: torch.dtype,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Read only `output_layer.weight` and the final norm weight out of a Megatron
-    torch_dist checkpoint, without loading the rest of the (possibly huge) model."""
+    """Read only the unembedding weight and the final norm weight out of a Megatron
+    torch_dist checkpoint, without loading the rest of the (possibly huge) model.
+
+    Falls back to the tied embedding weight when the model ties input/output
+    embeddings (the default unless --untie-embeddings-and-output-weights is set):
+    such checkpoints have no separate output_layer.weight at all.
+    """
     checkpoint_dir = _resolve_teacher_checkpoint_dir(checkpoint_root, ckpt_step)
+    reader = dist_cp.FileSystemReader(str(checkpoint_dir))
+    available_keys = reader.read_metadata().state_dict_metadata.keys()
+    output_layer_key = _OUTPUT_LAYER_KEY if _OUTPUT_LAYER_KEY in available_keys else _TIED_EMBEDDING_KEY
+
     state_dict = {
-        _OUTPUT_LAYER_KEY: torch.empty((vocab_size, hidden_size), dtype=dtype),
+        output_layer_key: torch.empty((vocab_size, hidden_size), dtype=dtype),
         _FINAL_NORM_KEY: torch.empty((hidden_size,), dtype=dtype),
     }
-    dist_cp.load(state_dict, storage_reader=dist_cp.FileSystemReader(str(checkpoint_dir)))
-    return state_dict[_OUTPUT_LAYER_KEY], state_dict[_FINAL_NORM_KEY]
+    dist_cp.load(state_dict, storage_reader=reader)
+    return state_dict[output_layer_key], state_dict[_FINAL_NORM_KEY]
 
 
 class TeacherUnembedding(torch.nn.Module):
@@ -79,5 +92,5 @@ def build_teacher_unembedding(args: Namespace, *, device: torch.device) -> Teach
     return TeacherUnembedding(
         output_layer_weight.to(device=device),
         final_norm_weight.to(device=device),
-        eps=args.norm_epsilon,
+        eps=args.layernorm_epsilon,
     ).to(device=device)

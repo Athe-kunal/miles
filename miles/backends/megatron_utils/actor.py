@@ -223,7 +223,10 @@ class MegatronTrainRayActor(TrainRayActor):
                 install_teacher_hidden_states_passthrough(model_chunk)
 
         if role in ("critic", "opd_teacher"):
-            if self.args.offload_train:
+            # The disaggregated OPD teacher has its own dedicated GPU (no colocated
+            # actor/rollout to free memory for), so it stays resident even when
+            # --offload-train is inherited from --colocate for the actor's sake.
+            if self.args.offload_train and role == "critic":
                 self.sleep()
             return start_rollout_id
 
