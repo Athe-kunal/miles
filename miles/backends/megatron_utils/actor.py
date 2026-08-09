@@ -412,13 +412,13 @@ class MegatronTrainRayActor(TrainRayActor):
             )
 
     @with_logs
-    def send_teacher_hidden_states(self, rollout_id: int, rollout_data_ref: Box) -> None:
+    def send_teacher_hidden_states(self, rollout_id: int, rollout_data_ref: Box) -> dict[str, Box]:
         rollout_data, store_get_result = get_rollout_data(self.args, rollout_data_ref, witness_info=None)
         with store_get_result:
             data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
             result = self.compute_teacher_hidden_states(data_iterator, num_microbatches, rollout_id=rollout_id)
-        for tensor in result.get("teacher_hidden_states", []):
-            dist.broadcast(tensor.contiguous(), src=0, group=self._opd_teacher_link_group)
+        tensors = result.get("teacher_hidden_states", [])
+        return {"teacher_hidden_states": Box(ray.put([tensor.detach().cpu() for tensor in tensors]))}
 
     @with_logs
     def compute_opd_full_kl(
@@ -531,18 +531,20 @@ class MegatronTrainRayActor(TrainRayActor):
     def _use_rollout_replay(self, m) -> bool:
         return getattr(self.args, f"use_rollout_{m.name}_replay", False)
 
-    def _receive_teacher_hidden_states(self, rollout_data: RolloutBatch) -> dict[str, list[torch.Tensor]]:
+    def _receive_teacher_hidden_states(self, external_data: dict) -> dict[str, list[torch.Tensor]]:
         if not get_parallel_state().is_pp_last_stage:
             return {}
-        hidden_size = self.hf_config.hidden_size
-        dtype = torch.bfloat16 if self.args.bf16 else (torch.float16 if self.args.fp16 else torch.float32)
+        hidden_states_ref = external_data.get("teacher_hidden_states")
+        assert hidden_states_ref is not None, (
+            "opd_teacher and actor share the same parallel topology, so the opd_teacher rank "
+            "paired with a pp-last-stage actor rank must have shipped 'teacher_hidden_states'"
+        )
         device = torch.cuda.current_device()
-        received = []
-        for response_length in rollout_data["response_lengths"]:
-            buf = torch.empty((response_length, hidden_size), dtype=dtype, device=device)
-            dist.broadcast(buf, src=0, group=self._opd_teacher_link_group)
-            received.append(buf)
-        return {"teacher_hidden_states": received}
+        return {
+            "teacher_hidden_states": [
+                tensor.to(device=device, non_blocking=True) for tensor in ray.get(hidden_states_ref.inner)
+            ]
+        }
 
     @with_logs
     def train_actor(
@@ -597,8 +599,8 @@ class MegatronTrainRayActor(TrainRayActor):
                             store_prefix="teacher_",
                         )
                     )
-                elif self._opd_teacher_link_group is not None:
-                    rollout_data.update(self._receive_teacher_hidden_states(rollout_data))
+                elif external_data is not None and "teacher_hidden_states" in external_data:
+                    rollout_data.update(self._receive_teacher_hidden_states(external_data))
                 self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
                 if not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics:
                     for m in all_replay_managers:

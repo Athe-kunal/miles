@@ -15,6 +15,7 @@ from megatron.core.models.gpt.gpt_layer_specs import (
 )
 from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core.utils import unwrap_model
 from megatron.training.arguments import core_transformer_config_from_args
 
 from miles.utils.audit_utils.witness.module import install_witness
@@ -131,11 +132,12 @@ class LinearForLastLayer(torch.nn.Linear):
 def install_teacher_hidden_states_passthrough(model_chunk: GPTModel) -> None:
     """Skip the vocab projection on a loaded disaggregated-OPD-teacher chunk's
     output_layer, so forward passes return hidden states instead of logits."""
-    output_layer = getattr(model_chunk, "output_layer", None)
+    unwrapped_model_chunk = unwrap_model(model_chunk)
+    output_layer = getattr(unwrapped_model_chunk, "output_layer", None)
     if output_layer is None:
         return
 
-    sequence_parallel = model_chunk.config.sequence_parallel
+    sequence_parallel = unwrapped_model_chunk.config.sequence_parallel
 
     def _passthrough(
         input_: torch.Tensor,

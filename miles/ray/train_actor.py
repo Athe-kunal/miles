@@ -13,7 +13,7 @@ import miles.utils.eval_config
 from miles.ray.ray_actor import RayActor
 from miles.utils import object_store
 from miles.utils.audit_utils.process_identity import TrainProcessIdentity
-from miles.utils.distributed_utils import init_gloo_group, init_process_group
+from miles.utils.distributed_utils import init_gloo_group
 from miles.utils.env_report import collect_and_print_node_env_report
 from miles.utils.ft_utils.heartbeat_utils import HeartbeatStatus, SimpleHeartbeat
 from miles.utils.logging_utils import configure_logger
@@ -57,7 +57,6 @@ class TrainRayActor(RayActor):
         self._world_size = world_size
         self._rank = rank
         self._indep_dp_store_addr = indep_dp_store_addr
-        self._opd_teacher_link_group = None
         if master_addr:
             self.master_addr, self.master_port = master_addr, master_port
         else:
@@ -150,17 +149,6 @@ class TrainRayActor(RayActor):
         print_memory("before TrainRayActor.clear_memory")
         clear_memory()
         print_memory("after TrainRayActor.clear_memory")
-
-    def join_opd_teacher_link(self, master_address: str, master_port: int, group_name: str, rank: int) -> None:
-        """Join a 2-rank NCCL group pairing this actor with the matching rank of a
-        disaggregated OPD teacher (rank 0) or student (rank 1). Blocks until both sides join."""
-        self._opd_teacher_link_group = init_process_group(
-            backend="nccl",
-            init_method=f"tcp://{master_address}:{master_port}",
-            world_size=2,
-            rank=rank,
-            group_name=group_name,
-        )
 
     @abc.abstractmethod
     def sleep(self, tags):

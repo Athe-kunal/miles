@@ -1,4 +1,3 @@
-import asyncio
 import copy
 import logging
 import socket
@@ -180,30 +179,6 @@ def _build_disaggregated_opd_teacher_args(args):
     return opd_teacher_args
 
 
-async def _connect_opd_teacher_link(teacher_actor, student_actor, link_index: int) -> None:
-    group_name = f"miles-opd-teacher-link-{link_index}"
-    teacher_ip, _ = await teacher_actor.get_master_addr_and_port.remote()
-    port = await teacher_actor.get_free_port_on_this_node.remote()
-    await asyncio.gather(
-        teacher_actor.join_opd_teacher_link.remote(teacher_ip, port, group_name, 0),
-        student_actor.join_opd_teacher_link.remote(teacher_ip, port, group_name, 1),
-    )
-
-
-async def connect_opd_teacher_links(opd_teacher_model, actor_model) -> None:
-    """Pair up rank i of the disaggregated OPD teacher with rank i of the actor via a
-    dedicated 2-rank NCCL group each, so hidden states can be sent rank-for-rank every
-    rollout step without going through the CPU-serialized Ray object store."""
-    teacher_handles = opd_teacher_model.actor_handles
-    student_handles = actor_model.actor_handles
-    await asyncio.gather(
-        *(
-            _connect_opd_teacher_link(teacher_actor, student_actor, i)
-            for i, (teacher_actor, student_actor) in enumerate(zip(teacher_handles, student_handles, strict=True))
-        )
-    )
-
-
 async def create_training_models(args, pgs, rollout_manager):
     disaggregated_opd_teacher = (
         args.use_opd and args.opd_type == "megatron" and args.opd_teacher_num_nodes is not None
@@ -253,7 +228,6 @@ async def create_training_models(args, pgs, rollout_manager):
             num_gpus_per_actor=1.0,
         )
         await opd_teacher_model.init()
-        await connect_opd_teacher_links(opd_teacher_model, actor_model)
     else:
         opd_teacher_model = None
 

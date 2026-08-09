@@ -49,12 +49,6 @@ class RayTrainGroup:
         # Allocate the GPUs for actors w/o instantiating them
         self._actor_handles = self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
 
-    @property
-    def actor_handles(self) -> list:
-        """Per-rank actor handles, in rank order. Needed to wire a disaggregated
-        OPD teacher's NCCL links to the matching actor rank; treat as read-only."""
-        return self._actor_handles
-
     def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
         return allocate_gpus_for_actor(
             args=self.args,
@@ -119,9 +113,10 @@ class RayTrainGroup:
         await self._broadcast("save_model", rollout_id, force_sync=force_sync)
 
     async def send_teacher_hidden_states(self, rollout_id, rollout_data_pack):
-        """Disaggregated OPD teacher: forward the batch and send hidden states to the
-        matching actor rank over the pre-connected NCCL links (see connect_opd_teacher_links)."""
-        await self._broadcast("send_teacher_hidden_states", rollout_id, rollout_data_pack["data_ref"])
+        """Disaggregated OPD teacher: forward the batch and return each rank's teacher
+        hidden states as a Ray object-store reference, to be merged into the matching
+        actor rank's external_data."""
+        return await self._broadcast("send_teacher_hidden_states", rollout_id, rollout_data_pack["data_ref"])
 
     async def export_hf(self, rollout_id: int, path: str):
         """Export current weights as an HF checkpoint (collective across all ranks)."""

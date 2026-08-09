@@ -22,16 +22,21 @@ logger = logging.getLogger(__name__)
 async def _train_actor_with_opd_teacher(
     actor_model, opd_teacher_model, rollout_id, rollout_data_pack, external_data=None
 ):
-    """Run the actor's training step and, for a disaggregated OPD teacher, its hidden-states
-    send concurrently: both sides must be in flight at once for their NCCL broadcasts to rendezvous."""
+    """For a disaggregated OPD teacher, compute and stash its hidden states in the Ray
+    object store first, then run the actor's training step with those references merged
+    into its external_data (rank i's teacher output paired with rank i's actor)."""
     if opd_teacher_model is None:
         return await actor_model.train(rollout_id, rollout_data_pack, external_data=external_data)
 
-    _, result = await asyncio.gather(
-        opd_teacher_model.send_teacher_hidden_states(rollout_id, rollout_data_pack),
-        actor_model.train(rollout_id, rollout_data_pack, external_data=external_data),
-    )
-    return result
+    teacher_results = await opd_teacher_model.send_teacher_hidden_states(rollout_id, rollout_data_pack)
+    if external_data is None:
+        combined_external_data = teacher_results
+    else:
+        combined_external_data = [
+            {**(rank_external_data or {}), **(rank_teacher_result or {})}
+            for rank_external_data, rank_teacher_result in zip(external_data, teacher_results, strict=True)
+        ]
+    return await actor_model.train(rollout_id, rollout_data_pack, external_data=combined_external_data)
 
 
 async def train(args):
