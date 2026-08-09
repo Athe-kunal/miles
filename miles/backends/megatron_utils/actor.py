@@ -239,9 +239,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.args,
                 self.model,
                 convert_to_global_name=args.megatron_to_hf_mode == "raw",
-                translate_gpu_to_cpu=not self.args.enable_weights_backuper,
             ),
-            single_tag=None if args.enable_weights_backuper else "actor",
             main_cast_ctx=main_cast_ctx,
         )
         self._active_model_tag: str | None = "actor"
@@ -866,6 +864,8 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
+            if dist.get_rank() == 0:
+                ray.get(self.rollout_manager.set_weight_version.remote(self.weight_updater.weight_version))
 
             if is_multi_lora_enabled(self.args):
                 from miles.backends.megatron_utils.multi_lora_utils import commit_weight_push
