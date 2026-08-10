@@ -113,8 +113,6 @@ def _get_placement_group_layout(args) -> tuple[int, int, int]:
     else:
         base_num_gpus, rollout_offset = actor_num_gpus + args.rollout_num_gpus + args.eval_num_gpus, actor_num_gpus
 
-    # The disaggregated OPD teacher gets its own physical GPUs appended after
-    # everything else, mirroring how `rollout` is sliced off `actor` above.
     opd_teacher_offset = base_num_gpus
     return base_num_gpus + _disaggregated_opd_teacher_num_gpus(args), rollout_offset, opd_teacher_offset
 
@@ -176,6 +174,7 @@ def _build_disaggregated_opd_teacher_args(args):
     opd_teacher_args.train_backend = "megatron"
     opd_teacher_args.use_opd = False
     opd_teacher_args.use_critic = False
+    opd_teacher_args.debug_disable_optimizer = True
     return opd_teacher_args
 
 
@@ -191,8 +190,6 @@ async def create_training_models(args, pgs, rollout_manager):
         role="actor",
         with_ref=args.kl_coef != 0 or args.use_kl_loss,
         rollout_manager=rollout_manager,
-        # Colocated weight-swap teacher only; a disaggregated teacher lives on its own
-        # mesh (opd_teacher_model below) instead of sharing the actor's GPUs.
         with_opd_teacher=args.use_opd and args.opd_type == "megatron" and not disaggregated_opd_teacher,
     )
     actor_start_rollout_ids = await actor_model.init()
