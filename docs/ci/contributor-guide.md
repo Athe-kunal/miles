@@ -1,10 +1,7 @@
 ---
 title: CI Contributor Guide
-description: For community contributors — how to add a CI test and confirm it runs, how to tell an infra failure from your own, and how to report a machine issue or a flaky test.
+description: For community contributors — add a CI test and confirm it runs, tell an infra failure from your own, and report a machine issue or a flaky test.
 ---
-
-# CI Contributor Guide
-
 This guide is for contributors landing small features and fixes. It answers three things: how to add a test to CI and be sure it actually runs, how to read a red check and decide whether it's your change or the infrastructure, and how to report a machine issue or a flaky test. You never edit the CI workflow YAML to add a test — read on.
 
 ## Add a test to CI
@@ -59,7 +56,7 @@ If your file does **not** show up, check, in order:
 - `labels=[]` (or omitted) → **always-on** within the eligible cadence; with the default `nightly=False`, this includes every PR.
 - `labels=["megatron"]` → runs only when the PR carries the GitHub label **`run-ci-megatron`** (the `run-ci-` prefix is added on the PR side). This keeps the heavy GPU matrix off unrelated PRs.
 
-Cadence is independent of labels: `nightly=True` makes a registration nightly-only, while a nightly run includes both ordinary and nightly-only registrations.
+Cadence is independent of labels: `nightly=True` excludes a registration from regular cadence, while nightly, weekly, and release runs include both ordinary and `nightly=True` registrations.
 
 So if your test is gated and you don't see it run, add the matching `run-ci-<label>` label to your PR. To force the full suite regardless of labels, a maintainer can add `run-ci-all`. Valid labels live in `tests/ci/labels.py`; using one outside that list is a hard error at collection time.
 

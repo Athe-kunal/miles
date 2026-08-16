@@ -130,7 +130,7 @@ def _execute_train(args: ScriptArgs):
     )
 
     rollout_args = (
-        "--rollout-function-path miles.rollout.fully_async_rollout.FullyAsyncRolloutFn "
+        "--fully-async "
         "--pause-generation-mode in_place "
         f"--async-max-concurrent-samples {args.async_max_concurrent_samples} "
         # Free a submission slot per finished sample, not per finished group:
@@ -299,7 +299,6 @@ def _execute_train(args: ScriptArgs):
 
     extra_env_vars = {
         # FullyAsyncRolloutFn is the class-based rollout API
-        "MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1",
         # On a watchdog timeout every rank dumps its recent collectives, which
         # identifies the rank that never arrived. Must reach the train actors,
         # so it goes through the Ray env rather than the launcher shell.
