@@ -1,9 +1,8 @@
 """Offline unit tests for the Daytona-sandbox agent function (no network, no GPU).
 
-Not collected by the repo-level pytest run (testpaths = ./tests); run manually
-when touching the adapter:
+Runs on every PR (stage-a-cpu, by the tests/fast/ convention); locally:
 
-    pytest examples/experimental/openenv/tests/ -q
+    pytest tests/fast/examples/experimental/openenv -q
 
 Covers only what is Daytona's own. Episode dispatch, create throttling, backoff
 budgets and the cancel-mid-create reaper belong to the shared SandboxBackend and are
@@ -16,11 +15,8 @@ import sys
 import types
 from pathlib import Path
 
+import openenv_daytona_agent_function as odaf
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import openenv_daytona_agent_function as odaf  # noqa: E402
 
 
 class _Throttled(Exception):
@@ -70,6 +66,14 @@ def test_is_throttle_error_classification():
     assert odaf._is_throttle_error(Exception("HTTP 429"))
     assert odaf._is_throttle_error(Exception("throttler tripped"))  # this backend's own vocabulary
     assert not odaf._is_throttle_error(RuntimeError("image build failed"))
+
+
+def test_is_throttle_error_quota_exhaustion():
+    """Org capacity errors are retryable: failing immediately aborts the episode
+    and discards the whole group."""
+    assert odaf._is_throttle_error(Exception("Failed to create sandbox: Total CPU limit exceeded. Max allowed: 500."))
+    assert odaf._is_throttle_error(Exception("Failed to create sandbox: Total memory limit exceeded."))
+    assert not odaf._is_throttle_error(RuntimeError("task.toml is missing docker_image"))
 
 
 def test_is_throttle_error_typed_daytona_class():

@@ -1,9 +1,8 @@
 """Offline unit tests for the openenv tbench2 adapter (no network, no GPU).
 
-Not collected by the repo-level pytest run (testpaths = ./tests); run manually
-when touching the adapter:
+Runs on every PR (stage-a-cpu, by the tests/fast/ convention); locally:
 
-    pytest examples/experimental/openenv/tests/ -q
+    pytest tests/fast/examples/experimental/openenv -q
 
 Covers the shared-server leg of the agent loop (this module's run_episode):
 its exec form, scoring path, and cleanup. The sandbox leg's dispatch and
@@ -12,12 +11,9 @@ below are shared with it.
 """
 
 import asyncio
-import sys
 import types
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import openenv_agent_function as oaf  # noqa: E402
+import openenv_agent_function as oaf
 
 
 def run_async(coro):
@@ -84,7 +80,7 @@ class _FakePolicy:
         msg = types.SimpleNamespace(
             content=text, model_dump=lambda exclude_none=True: {"role": "assistant", "content": text}
         )
-        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
 
 
 _CLASSES = {"env": _FakeEnv, "action": _FakeAction}
@@ -118,6 +114,35 @@ def test_shared_leg_dispatch(monkeypatch):
     assert metrics["turns"] == 2 and metrics["tool_calls"] == 1
 
 
+class _TruncatingPolicy(_FakePolicy):
+    """Emits a command the model never finished writing."""
+
+    async def _create(self, **kw):
+        completion = await super()._create(**kw)
+        completion.choices[0].finish_reason = "length"
+        return completion
+
+
+def test_length_capped_turn_ends_the_episode(monkeypatch):
+    """A turn cut off by the token cap must not be executed: the command is
+    truncated, so running it would send an arbitrary prefix to the sandbox."""
+    monkeypatch.setattr(oaf, "load_tbench2", lambda: _CLASSES)
+
+    async def spying_with_env(env_cls, env_url, body):
+        return await body(env_cls())
+
+    monkeypatch.setattr(oaf, "_with_env", spying_with_env)
+
+    _, metrics = run_async(
+        oaf.run_episode(_TruncatingPolicy(), "m", [{"role": "system", "content": "s"}], {}, {"task_id": "t1"})
+    )
+
+    assert metrics["turns"] == 1
+    assert metrics["tool_calls"] == 0
+    execs = [a for a in _FakeEnv.last_actions if a.action_type == "exec"]
+    assert not [a for a in execs if "echo hi" in (a.command or "")], "ran a command the model never finished"
+
+
 def test_old_server_reward_is_not_trusted(monkeypatch):
     """A server without the canonical contract (e.g. an out-of-date install)
     answers `evaluate` with a plausible-looking reward but no harness marker
@@ -144,3 +169,42 @@ def test_old_server_reward_is_not_trusted(monkeypatch):
     )
     assert reward is None
     assert metrics["turns"] == 2  # the episode itself completed; only scoring was rejected
+
+
+class _TruncatedPolicy:
+    """Every turn returns a command cut off by the per-turn cap."""
+
+    def __init__(self):
+        self.n = 0
+        self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self._create))
+
+    async def _create(self, **kw):
+        self.n += 1
+        text = "```bash\nmake -j && ./run_all_the"
+        msg = types.SimpleNamespace(
+            content=text, model_dump=lambda exclude_none=True: {"role": "assistant", "content": text}
+        )
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="length")])
+
+
+def test_truncated_turn_ends_the_episode(monkeypatch):
+    """A finish_reason="length" turn closes the trainable sample — collection
+    keeps nothing past it, so the loop stops there. The cut-off command is not
+    executed; scoring still runs."""
+    monkeypatch.setattr(oaf, "load_tbench2", lambda: _CLASSES)
+
+    async def spying_with_env(env_cls, env_url, body):
+        return await body(env_cls())
+
+    monkeypatch.setattr(oaf, "_with_env", spying_with_env)
+
+    policy = _TruncatedPolicy()
+    reward, metrics = run_async(
+        oaf.run_episode(policy, "m", [{"role": "system", "content": "s"}], {}, {"task_id": "t1"})
+    )
+    assert policy.n == 1, "the loop must stop at the truncated turn"
+    actions = _FakeEnv.last_actions
+    execs = [a for a in actions if a.action_type == "exec"]
+    assert all("/tmp/tbench2_env_runs" in (a.command or "") for a in execs), execs
+    assert any(a.action_type == "evaluate" for a in actions), "scoring still runs"
+    assert reward == 1.0 and metrics["turns"] == 1
